@@ -1,0 +1,135 @@
+name: Build, Push to ECR & Deploy to EKS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  AWS_REGION: eu-west-2
+  ECR_REPOSITORY: echo-app
+  EKS_CLUSTER_NAME: echo-app-cluster
+  K8S_NAMESPACE: echo-app
+
+jobs:
+  # ──────────────────────────────────────────────
+  # Job 1: Test
+  # ──────────────────────────────────────────────
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test -v -race -coverprofile=coverage.out ./...
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+
+  # ──────────────────────────────────────────────
+  # Job 2: Build & Push to ECR
+  # ──────────────────────────────────────────────
+  build-and-push:
+    name: Build & Push Docker Image
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    outputs:
+      image: ${{ steps.build-image.outputs.image }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+  # ──────────────────────────────────────────────
+  # Job 3: Deploy to EKS
+  # ──────────────────────────────────────────────
+  deploy:
+    name: Deploy to EKS
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig for EKS
+        run: |
+          aws eks update-kubeconfig --name $EKS_CLUSTER_NAME --region $AWS_REGION
+
+      - name: Deploy infrastructure (PostgreSQL, Redis, RabbitMQ)
+        run: |
+          kubectl apply -f k8s/namespace.yaml
+          kubectl apply -f k8s/configmap.yaml
+          kubectl apply -f k8s/postgres.yaml
+          kubectl apply -f k8s/redis.yaml
+          kubectl apply -f k8s/rabbitmq.yaml
+
+      - name: Wait for infrastructure to be ready
+        run: |
+          kubectl -n $K8S_NAMESPACE rollout status deployment/postgres --timeout=120s
+          kubectl -n $K8S_NAMESPACE rollout status deployment/redis --timeout=120s
+          kubectl -n $K8S_NAMESPACE rollout status deployment/rabbitmq --timeout=120s
+
+      - name: Deploy application
+        env:
+          IMAGE: ${{ needs.build-and-push.outputs.image }}
+        run: |
+          sed -i "s|IMAGE_PLACEHOLDER|$IMAGE|g" k8s/app.yaml
+          kubectl apply -f k8s/app.yaml
+
+      - name: Wait for application rollout
+        run: |
+          kubectl -n $K8S_NAMESPACE rollout status deployment/echo-app --timeout=180s
+
+      - name: Get service endpoint
+        run: |
+          echo "=== Deployment Complete ==="
+          echo "Service endpoint:"
+          kubectl -n $K8S_NAMESPACE get svc echo-app-service -o wide
+          echo ""
+          echo "Running pods:"
+          kubectl -n $K8S_NAMESPACE get pods
