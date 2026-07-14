@@ -17,6 +17,8 @@ spec:
       labels:
         app: redis
     spec:
+      securityContext:
+        fsGroup: 999
       containers:
         - name: redis
           image: redis:7-alpine

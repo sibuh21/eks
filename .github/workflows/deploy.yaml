@@ -108,11 +108,17 @@ jobs:
           kubectl apply -f k8s/redis.yaml
           kubectl apply -f k8s/rabbitmq.yaml
 
+      - name: Restart infrastructure rollouts
+        run: |
+          kubectl -n $K8S_NAMESPACE rollout restart deployment/postgres
+          kubectl -n $K8S_NAMESPACE rollout restart deployment/redis
+          kubectl -n $K8S_NAMESPACE rollout restart deployment/rabbitmq
+
       - name: Wait for infrastructure to be ready
         run: |
-          kubectl -n $K8S_NAMESPACE rollout status deployment/postgres --timeout=180s
-          kubectl -n $K8S_NAMESPACE rollout status deployment/redis --timeout=180s
-          kubectl -n $K8S_NAMESPACE rollout status deployment/rabbitmq --timeout=180s
+          kubectl -n $K8S_NAMESPACE rollout status deployment/postgres --timeout=300s
+          kubectl -n $K8S_NAMESPACE rollout status deployment/redis --timeout=300s
+          kubectl -n $K8S_NAMESPACE rollout status deployment/rabbitmq --timeout=300s
 
       - name: Debug infrastructure (on failure)
         if: failure()
