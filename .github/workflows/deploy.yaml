@@ -106,14 +106,15 @@ jobs:
           REDIS_URL: ${{ secrets.REDIS_URL }}
           RABBITMQ_URL: ${{ secrets.RABBITMQ_URL }}
         run: |
-          # Substitute the secrets dynamically
-          sed -i "s|DATABASE_URL_PLACEHOLDER|$DATABASE_URL|g" k8s/secret.yaml
-          sed -i "s|REDIS_URL_PLACEHOLDER|$REDIS_URL|g" k8s/secret.yaml
-          sed -i "s|RABBITMQ_URL_PLACEHOLDER|$RABBITMQ_URL|g" k8s/secret.yaml
-
           kubectl apply -f k8s/namespace.yaml
           kubectl apply -f k8s/configmap.yaml
-          kubectl apply -f k8s/secret.yaml
+
+          # Dynamically create the secret to safely handle any special characters or newlines
+          kubectl -n $K8S_NAMESPACE create secret generic echo-app-secret \
+            --from-literal=DATABASE_URL="$DATABASE_URL" \
+            --from-literal=REDIS_URL="$REDIS_URL" \
+            --from-literal=RABBITMQ_URL="$RABBITMQ_URL" \
+            --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Debug Kubernetes resources (on failure)
         if: failure()
