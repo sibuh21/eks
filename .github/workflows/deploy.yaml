@@ -9,7 +9,7 @@ on:
 env:
   AWS_REGION: eu-west-2
   ECR_REPOSITORY: echo-app
-  EKS_CLUSTER_NAME: echo-app-cluster
+  EKS_CLUSTER_NAME: echo-app-cluster1
   K8S_NAMESPACE: echo-app
 
 jobs:
