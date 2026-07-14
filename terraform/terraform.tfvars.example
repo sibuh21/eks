@@ -1,0 +1,24 @@
+# Copy this file to 'terraform.tfvars' and fill in your actual AWS resource IDs and passwords
+
+# AWS region to provision resources in
+aws_region = "eu-west-2"
+
+# VPC ID where EKS is deployed
+vpc_id = "vpc-0123456789abcdef0"
+
+# List of private subnets for RDS, ElastiCache and Amazon MQ
+private_subnet_ids = [
+  "subnet-0123456789abcdef0",
+  "subnet-0123456789abcdef1"
+]
+
+# EKS Node Group Security Group ID to allow connections
+eks_security_group_id = "sg-0123456789abcdef2"
+
+# PostgreSQL credentials
+db_username = "dbadmin"
+db_password = "SuperSecretPassword123!" # Change this to a secure password
+
+# Amazon MQ RabbitMQ credentials
+mq_username = "mqadmin"
+mq_password = "SuperSecretPassword123!" # Change this to a secure password

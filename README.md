@@ -1,22 +1,36 @@
-# Echo App — Go + PostgreSQL + Redis + RabbitMQ on EKS
+# Echo App — Go + AWS Managed Services (RDS, ElastiCache, Amazon MQ) on EKS
 
-A production-ready Go REST API built with the [Echo](https://echo.labstack.com/) framework, backed by PostgreSQL, Redis, and RabbitMQ. Containerized with Docker, pushed to AWS ECR, and deployed to EKS via a GitHub Actions CI/CD pipeline.
+A production-ready Go REST API built with the [Echo](https://echo.labstack.com/) framework, backed by PostgreSQL, Redis, and RabbitMQ. Containerized with Docker, pushed to AWS ECR, and deployed to EKS. 
+
+This branch (`use-aws-services`) utilizes **AWS Managed Services** instead of hosting stateful containers in the EKS cluster:
+- **Database**: AWS RDS PostgreSQL
+- **Cache**: AWS ElastiCache for Redis
+- **Message Broker**: Amazon MQ for RabbitMQ
+
+## Why Move State Out of EKS?
+
+Hosting stateful applications (like database servers) inside EKS with EBS volumes (`gp2`/`gp3`) often encounters mounting deadlocks during rollouts:
+1. **`1 old replicas are pending termination` Hanging**: ECR/EKS deployments default to a `RollingUpdate` strategy. EBS volumes (`ReadWriteOnce`) can only mount to a single Node at a time. The new pod cannot start because the volume is locked by the old pod, and the old pod won't terminate until the new pod is ready, creating a deadlock.
+2. **`lost+found` Conflicts**: ext4 formatted EBS volumes place a `lost+found/` directory at the mount root. PostgreSQL `initdb` refuses to initialize in a non-empty directory.
+3. **Permissions**: EBS volume mounts default to root permissions, causing write failures for non-root containers.
+
+Moving to RDS, ElastiCache, and Amazon MQ eliminates cluster state management, increases reliability, and makes EKS deployments fully stateless and lightweight.
 
 ## Architecture
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌──────────────┐
-│   Client     │────▶│  Echo App    │────▶│  PostgreSQL  │
-│              │     │  (Go API)    │────▶│  (Database)  │
-└─────────────┘     │              │     └──────────────┘
-                    │              │────▶┌──────────────┐
-                    │              │     │    Redis      │
-                    │              │     │   (Cache)     │
-                    │              │     └──────────────┘
-                    │              │────▶┌──────────────┐
-                    │              │     │  RabbitMQ     │
-                    └──────────────┘     │  (Messaging)  │
-                                        └──────────────┘
+                                    ┌──────────────┐
+                                ┌──▶│   AWS RDS    │
+                                │   │ (PostgreSQL) │
+┌─────────────┐     ┌───────────┴──┐└──────────────┘
+│   Client     │────▶│  Echo App   │────▶┌──────────────┐
+│             │     │ (EKS Pods)   │     │ElastiCache   │
+└─────────────┘     └───────────┬──┘     │   (Redis)    │
+                                │        └──────────────┘
+                                └──▶┌──────────────┐
+                                    │  Amazon MQ   │
+                                    │  (RabbitMQ)  │
+                                    └──────────────┘
 ```
 
 ## Project Structure
@@ -33,151 +47,55 @@ A production-ready Go REST API built with the [Echo](https://echo.labstack.com/)
 │   └── model/item.go           # Domain models
 ├── k8s/                        # Kubernetes manifests
 │   ├── namespace.yaml
-│   ├── configmap.yaml
-│   ├── postgres.yaml           # DockerHub postgres:16-alpine
-│   ├── redis.yaml              # DockerHub redis:7-alpine
-│   ├── rabbitmq.yaml           # DockerHub rabbitmq:3-management-alpine
+│   ├── configmap.yaml          # Non-sensitive config (PORT)
+│   ├── secret.yaml             # Sensitive config placeholder (DB, Redis, MQ)
 │   └── app.yaml                # App deployment (ECR image) + HPA
+├── terraform/                  # Infrastructure as Code
+│   ├── main.tf                 # Terraform provider configuration
+│   ├── variables.tf            # Variables (VPC, Subnets, Node SG)
+│   ├── rds.tf                  # RDS PostgreSQL Setup
+│   ├── elasticache.tf          # ElastiCache Redis Setup
+│   ├── amazon_mq.tf            # Amazon MQ RabbitMQ Setup
+│   └── outputs.tf              # Connection endpoints outputs
 ├── .github/workflows/
-│   └── deploy.yaml             # CI/CD: Test → ECR → EKS
+│   └── deploy.yaml             # CI/CD: Test → ECR → EKS + Secret Substitution
 ├── Dockerfile                  # Multi-stage build
 ├── docker-compose.yaml         # Local development
 └── go.mod
 ```
 
-## API Endpoints
+## Provisioning AWS Infrastructure (Terraform)
 
-| Method | Path              | Description                    |
-|--------|-------------------|--------------------------------|
-| GET    | `/health`         | Health check (all services)    |
-| POST   | `/api/v1/items`   | Create an item                 |
-| GET    | `/api/v1/items`   | List all items (cached)        |
-| GET    | `/api/v1/items/:id` | Get item by ID (cached)      |
-| PUT    | `/api/v1/items/:id` | Update an item               |
-| DELETE | `/api/v1/items/:id` | Delete an item               |
-| POST   | `/api/v1/events`  | Publish event to RabbitMQ      |
+Navigate to the `terraform/` folder and customize variables in `variables.tf` (or create a `terraform.tfvars` file).
+
+```bash
+cd terraform
+terraform init
+terraform apply
+```
+
+Specify your existing EKS cluster's VPC ID, subnets, and node security group ID to allow direct communication between the pods and the databases.
+
+## CI/CD Pipeline Configuration
+
+The GitHub Actions pipeline (`.github/workflows/deploy.yaml`) automatically substitutes connection strings from GitHub Secrets into `k8s/secret.yaml` before deploying.
+
+### Required GitHub Secrets
+
+| Secret | Description |
+|---|---|
+| `AWS_ACCESS_KEY_ID` | AWS access key for deployment |
+| `AWS_SECRET_ACCESS_KEY` | AWS secret key for deployment |
+| `DATABASE_URL` | `postgres://dbadmin:password@rds-endpoint:5432/echo_app?sslmode=require` |
+| `REDIS_URL` | `rediss://elasticache-endpoint:6379` |
+| `RABBITMQ_URL` | `amqps://mqadmin:password@amazon-mq-endpoint:5671` |
 
 ## Local Development
 
-### Prerequisites
-- Go 1.23+
-- Docker & Docker Compose
-
-### Run locally with Docker Compose
+You can still use Docker Compose for local testing. It spins up local instances of PostgreSQL, Redis, and RabbitMQ:
 
 ```bash
 docker compose up --build
 ```
+The local API is exposed on `http://localhost:8080`.
 
-The API will be available at `http://localhost:8080`.
-
-### Run Go app directly (requires running infra)
-
-```bash
-# Start only infrastructure
-docker compose up postgres redis rabbitmq -d
-
-# Run the app
-go run ./cmd/server
-```
-
-### Example requests
-
-```bash
-# Health check
-curl http://localhost:8080/health
-
-# Create item
-curl -X POST http://localhost:8080/api/v1/items \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Widget", "description": "A useful widget", "price": 29.99}'
-
-# List items
-curl http://localhost:8080/api/v1/items
-
-# Publish event
-curl -X POST http://localhost:8080/api/v1/events \
-  -H "Content-Type: application/json" \
-  -d '{"type": "notification", "payload": {"message": "Hello from RabbitMQ!"}}'
-```
-
-## CI/CD Pipeline
-
-The GitHub Actions pipeline (`.github/workflows/deploy.yaml`) runs on every push to `main`:
-
-```
-┌──────┐     ┌───────────────┐     ┌──────────────┐
-│ Test │────▶│ Build & Push  │────▶│ Deploy to    │
-│      │     │   to ECR      │     │    EKS       │
-└──────┘     └───────────────┘     └──────────────┘
-```
-
-### Required GitHub Secrets
-
-| Secret                  | Description                    |
-|-------------------------|--------------------------------|
-| `AWS_ACCESS_KEY_ID`     | AWS IAM access key             |
-| `AWS_SECRET_ACCESS_KEY` | AWS IAM secret key             |
-
-### Required AWS Resources
-
-1. **ECR Repository** — named `echo-app`
-2. **EKS Cluster** — named `echo-app-cluster`
-3. **IAM User/Role** — with permissions for ECR push and EKS deploy
-
-### Create ECR repository
-
-```bash
-aws ecr create-repository --repository-name echo-app --region us-east-1
-```
-
-### Create EKS cluster
-
-```bash
-eksctl create cluster \
-  --name echo-app-cluster \
-  --region us-east-1 \
-  --nodes 2 \
-  --node-type t3.medium
-```
-
-## Kubernetes Deployment
-
-Infrastructure services use **DockerHub images**:
-- `postgres:16-alpine` — persistent storage with PVC
-- `redis:7-alpine` — AOF persistence with LRU eviction
-- `rabbitmq:3-management-alpine` — management UI on port 15672
-
-The application image is pulled from **AWS ECR**.
-
-### Manual deployment
-
-```bash
-# Configure kubectl
-aws eks update-kubeconfig --name echo-app-cluster --region us-east-1
-
-# Deploy everything
-kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/configmap.yaml
-kubectl apply -f k8s/postgres.yaml
-kubectl apply -f k8s/redis.yaml
-kubectl apply -f k8s/rabbitmq.yaml
-
-# Replace IMAGE_PLACEHOLDER in app.yaml with your ECR image, then:
-kubectl apply -f k8s/app.yaml
-
-# Check status
-kubectl -n echo-app get pods
-kubectl -n echo-app get svc
-```
-
-## Configuration
-
-All configuration is via environment variables:
-
-| Variable       | Default                                                        | Description         |
-|----------------|----------------------------------------------------------------|---------------------|
-| `PORT`         | `8080`                                                         | Server listen port  |
-| `DATABASE_URL` | `postgres://postgres:postgres@localhost:5432/echo_app?sslmode=disable` | PostgreSQL DSN |
-| `REDIS_URL`    | `redis://localhost:6379/0`                                     | Redis connection    |
-| `RABBITMQ_URL` | `amqp://guest:guest@localhost:5672/`                           | RabbitMQ AMQP URL   |

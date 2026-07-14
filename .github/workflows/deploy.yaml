@@ -100,49 +100,32 @@ jobs:
         run: |
           aws eks update-kubeconfig --name $EKS_CLUSTER_NAME --region $AWS_REGION
 
-      - name: Deploy infrastructure (PostgreSQL, Redis, RabbitMQ)
+      - name: Deploy Secrets and ConfigMaps
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          RABBITMQ_URL: ${{ secrets.RABBITMQ_URL }}
         run: |
+          # Substitute the secrets dynamically
+          sed -i "s|DATABASE_URL_PLACEHOLDER|$DATABASE_URL|g" k8s/secret.yaml
+          sed -i "s|REDIS_URL_PLACEHOLDER|$REDIS_URL|g" k8s/secret.yaml
+          sed -i "s|RABBITMQ_URL_PLACEHOLDER|$RABBITMQ_URL|g" k8s/secret.yaml
+
           kubectl apply -f k8s/namespace.yaml
           kubectl apply -f k8s/configmap.yaml
-          kubectl apply -f k8s/postgres.yaml
-          kubectl apply -f k8s/redis.yaml
-          kubectl apply -f k8s/rabbitmq.yaml
+          kubectl apply -f k8s/secret.yaml
 
-      - name: Restart infrastructure rollouts
-        run: |
-          kubectl -n $K8S_NAMESPACE rollout restart deployment/postgres
-          kubectl -n $K8S_NAMESPACE rollout restart deployment/redis
-          kubectl -n $K8S_NAMESPACE rollout restart deployment/rabbitmq
-
-      - name: Wait for infrastructure to be ready
-        run: |
-          kubectl -n $K8S_NAMESPACE rollout status deployment/postgres --timeout=300s
-          kubectl -n $K8S_NAMESPACE rollout status deployment/redis --timeout=300s
-          kubectl -n $K8S_NAMESPACE rollout status deployment/rabbitmq --timeout=300s
-
-      - name: Debug infrastructure (on failure)
+      - name: Debug Kubernetes resources (on failure)
         if: failure()
         run: |
           echo "=== Pod Status ==="
           kubectl -n $K8S_NAMESPACE get pods -o wide
           echo ""
-          echo "=== PVC Status ==="
-          kubectl -n $K8S_NAMESPACE get pvc
-          echo ""
           echo "=== Events ==="
           kubectl -n $K8S_NAMESPACE get events --sort-by='.lastTimestamp' | tail -30
           echo ""
-          echo "=== Pod Logs ==="
-          for pod in $(kubectl -n $K8S_NAMESPACE get pods --no-headers -o custom-columns=":metadata.name"); do
-            echo "--- Logs for $pod ---"
-            kubectl -n $K8S_NAMESPACE logs "$pod" --tail=50 2>/dev/null || echo "No logs available"
-          done
-          echo ""
-          echo "=== Pod Descriptions ==="
-          for pod in $(kubectl -n $K8S_NAMESPACE get pods --no-headers -o custom-columns=":metadata.name"); do
-            echo "--- Describe $pod ---"
-            kubectl -n $K8S_NAMESPACE describe pod "$pod" | tail -30
-          done
+          echo "=== Secrets & ConfigMaps ==="
+          kubectl -n $K8S_NAMESPACE get secret,configmap
 
       - name: Deploy application
         env:
