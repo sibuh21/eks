@@ -10,20 +10,7 @@ variable "environment" {
   description = "Environment name used for tagging"
 }
 
-variable "vpc_id" {
-  type        = string
-  description = "The VPC ID where the EKS cluster is running"
-}
 
-variable "private_subnet_ids" {
-  type        = list(string)
-  description = "List of private subnet IDs for database and cache placement"
-}
-
-variable "eks_security_group_id" {
-  type        = string
-  description = "The security group ID of the EKS node group to allow access to RDS, Redis, and RabbitMQ"
-}
 
 variable "db_username" {
   type        = string

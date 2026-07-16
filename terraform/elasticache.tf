@@ -1,14 +1,14 @@
 resource "aws_security_group" "elasticache" {
   name        = "echo-app-redis-sg"
   description = "Allow access to ElastiCache Redis from EKS"
-  vpc_id      = var.vpc_id
+  vpc_id      = module.vpc.vpc_id
 
   ingress {
     description     = "Redis from EKS nodes"
     from_port       = 6379
     to_port         = 6379
     protocol        = "tcp"
-    security_groups = [var.eks_security_group_id]
+    security_groups = [module.eks.node_security_group_id]
   }
 
   egress {
@@ -26,7 +26,7 @@ resource "aws_security_group" "elasticache" {
 
 resource "aws_elasticache_subnet_group" "redis" {
   name       = "echo-app-redis-subnet-group"
-  subnet_ids = var.private_subnet_ids
+  subnet_ids = module.vpc.private_subnets
 
   tags = {
     Environment = var.environment

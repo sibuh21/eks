@@ -1,14 +1,14 @@
 resource "aws_security_group" "rds" {
   name        = "echo-app-rds-sg"
   description = "Allow access to RDS PostgreSQL from EKS"
-  vpc_id      = var.vpc_id
+  vpc_id      = module.vpc.vpc_id
 
   ingress {
     description     = "PostgreSQL from EKS nodes"
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"
-    security_groups = [var.eks_security_group_id]
+    security_groups = [module.eks.node_security_group_id]
   }
 
   egress {
@@ -26,7 +26,7 @@ resource "aws_security_group" "rds" {
 
 resource "aws_db_subnet_group" "rds" {
   name       = "echo-app-rds-subnet-group"
-  subnet_ids = var.private_subnet_ids
+  subnet_ids = module.vpc.private_subnets
 
   tags = {
     Environment = var.environment
